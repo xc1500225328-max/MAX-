@@ -13,6 +13,9 @@ global vcm_namePresetArr = #("客厅", "餐厅", "主卧")
 global vcm_lockedViewID = 0
 global vcm_autoName = false 
 global vcm_sortByName = false 
+global vcm_compactMode = false
+global vcm_dialogFullHeight = 810
+global vcm_dialogCompactHeight = 300
 global vcm_iniPath = getDir #plugcfg + "\\VRayCamPro_Presets.ini"
 
 fn vcm_syncSelectionFromScene = (
@@ -35,7 +38,7 @@ fn vcm_syncSelectionFromScene = (
             if idx > 0 do (
                 ro_vcm_main.lb_cams.selection = #{idx}
                 local info = ro_vcm_main.vcm_getCameraResInfo targetCam
-                if info[1] != undefined do ro_vcm_main.lbl_status.text = "选: " + (info[1] as integer) as string + "x" + (info[2] as integer) as string
+                if info[1] != undefined do ro_vcm_main.lbl_status.text = "选: " + ((info[1] as integer) as string) + "x" + ((info[2] as integer) as string)
             )
         )
     )
@@ -53,6 +56,7 @@ buttonText:"VRayCam"
     fn vcm_saveSettings = ( 
         setINISetting vcm_iniPath "Settings" "AutoName" (vcm_autoName as string) 
         setINISetting vcm_iniPath "Settings" "SortByName" (vcm_sortByName as string)
+        setINISetting vcm_iniPath "Settings" "CompactMode" (vcm_compactMode as string)
         setINISetting vcm_iniPath "Presets" "NameData" (vcm_namePresetArr as string)
     )
 
@@ -71,6 +75,9 @@ buttonText:"VRayCam"
         local sortStr = getINISetting vcm_iniPath "Settings" "SortByName"
         if sortStr == "true" then vcm_sortByName = true else vcm_sortByName = false
 
+        local compactStr = getINISetting vcm_iniPath "Settings" "CompactMode"
+        if compactStr == "true" then vcm_compactMode = true else vcm_compactMode = false
+
         local nameStr = getINISetting vcm_iniPath "Presets" "NameData"
         if nameStr != "" then (
             try ( 
@@ -82,9 +89,10 @@ buttonText:"VRayCam"
     )
     vcm_loadPresets()
 
-    rollout ro_vcm_main "VRay 相机助手 v28.6" (
-        button btn_lock_view "锁定切换视口" width:102 height:22 across:2 align:#left offset:[0,5]
-        checkbutton ckb_lock_render "锁定渲染视口" width:102 height:22 align:#right offset:[0,5] highlightColor:(color 255 100 100) 
+    rollout ro_vcm_main "VRay 相机助手 v28.7" (
+        button btn_lock_view "锁定切换视口" width:82 height:22 across:3 align:#left offset:[0,5]
+        checkbutton ckb_lock_render "锁定渲染视口" width:82 height:22 align:#left offset:[0,5] highlightColor:(color 255 100 100) 
+        button btn_toggle_panel "收起" width:40 height:22 align:#right offset:[0,5] toolTip:"折叠或展开相机列表以下的面板"
 
         multilistbox lb_cams "" height:20 offset:[0,-2]
         
@@ -92,6 +100,10 @@ buttonText:"VRayCam"
         checkbutton ckb_sort_name "排序" width:50 offset:[-5,0] height:20 highlightColor:(color 100 255 100)
         checkbutton ckb_auto_name "写名称" width:50 offset:[-2,0] height:20 highlightColor:(color 255 200 100) 
         button btn_help "帮助" width:50 offset:[1,0] height:20
+
+        button btn_select_all "全选" width:102 height:22 across:2 align:#left offset:[0,4]
+        button btn_batch_capture "批量截图" width:102 height:22 align:#right offset:[0,4]
+        dropdownlist ddl_capture_format "格式" items:#("JPG", "PNG", "TIF") selection:1 width:210 height:18 offset:[0,2]
         
         label lbl_status "准备就绪" style_sunkenedge:true width:210 height:18 color:green offset:[0,2]
 
@@ -124,7 +136,65 @@ buttonText:"VRayCam"
         fn vcm_getRatioStr w h = (
             local r = (w as float) / h
             local r_val = (floor (r * 1000 + 0.5)) / 1000.0
-            return "(" + r_val as string + ")"
+            return "(" + (r_val as string) + ")"
+        )
+
+        fn vcm_joinNameList names = (
+            local result = ""
+            for i = 1 to names.count do (
+                if i > 1 do result += "\n"
+                result += names[i]
+            )
+            result
+        )
+
+        fn vcm_sanitizeFileName nameStr = (
+            local sanitized = trimRight (trimLeft nameStr)
+            local invalidChars = #("\\", "/", ":", "*", "?", "\"", "<", ">", "|")
+            for ch in invalidChars do sanitized = substituteString sanitized ch "_"
+            while sanitized.count > 0 and (sanitized[sanitized.count] == "." or sanitized[sanitized.count] == " ") do (
+                sanitized = substring sanitized 1 (sanitized.count - 1)
+            )
+            if sanitized == "" then sanitized = "Camera"
+            sanitized
+        )
+
+        fn vcm_getFormatExt formatStr = (
+            case (toLower formatStr) of (
+                "jpg": ".jpg"
+                "png": ".png"
+                "tif": ".tif"
+                default: ".jpg"
+            )
+        )
+
+        fn vcm_buildOutputFilePath cam outDir formatStr = (
+            local dirPath = outDir
+            if dirPath.count > 0 and dirPath[dirPath.count] != "\\" do dirPath += "\\"
+            dirPath + (vcm_sanitizeFileName cam.name) + (vcm_getFormatExt formatStr)
+        )
+
+        fn vcm_confirmOverwrite filePath = (
+            dotNet.loadAssembly "System.Windows.Forms"
+            local dr = dotNetClass "System.Windows.Forms.DialogResult"
+            local mb = dotNetClass "System.Windows.Forms.MessageBox"
+            local mbb = dotNetClass "System.Windows.Forms.MessageBoxButtons"
+            local mbi = dotNetClass "System.Windows.Forms.MessageBoxIcon"
+            local msg = "文件已存在：\n" + filePath + "\n\n是：覆盖当前文件\n否：跳过当前文件\n取消：终止整个批量任务"
+            local result = mb.Show msg "批量截图" mbb.YesNoCancel mbi.Question
+            if result == dr.Yes then #overwrite else if result == dr.No then #skip else #cancel
+        )
+
+        fn vcm_pickOutputFolder = (
+            dotNet.loadAssembly "System.Windows.Forms"
+            local dialog = dotNetObject "System.Windows.Forms.FolderBrowserDialog"
+            dialog.Description = "选择批量截图输出目录"
+            dialog.ShowNewFolderButton = true
+            local dr = dotNetClass "System.Windows.Forms.DialogResult"
+            local result = dialog.ShowDialog()
+            local selectedPath = if result == dr.OK then dialog.SelectedPath else undefined
+            dialog.Dispose()
+            selectedPath
         )
 
         fn vcm_getCameraResInfo cam = (
@@ -142,7 +212,7 @@ buttonText:"VRayCam"
                 if (w != undefined) do source = "手"
             )
             if (w != undefined and h != undefined) then (
-                return #(w, h, (" [" + source + "] " + (w as integer) as string + "x" + (h as integer) as string + " " + vcm_getRatioStr w h), source)
+                return #(w, h, (" [" + source + "] " + ((w as integer) as string) + "x" + ((h as integer) as string) + " " + vcm_getRatioStr w h), source)
             ) else return #(undefined, undefined, "", "")
         )
 
@@ -168,7 +238,7 @@ buttonText:"VRayCam"
                 c.name + suffix
             )
             lb_cams.selection = oldSel
-            lbl_status.text = "F10: " + renderWidth as string + "x" + renderHeight as string + " " + vcm_getRatioStr renderWidth renderHeight
+            lbl_status.text = "F10: " + (renderWidth as string) + "x" + (renderHeight as string) + " " + vcm_getRatioStr renderWidth renderHeight
         )
 
         fn applyNamePreset idx = (
@@ -212,9 +282,9 @@ buttonText:"VRayCam"
                 local safeText = substituteString t "\"" "\\\""
                 local displayTxt = if safeText.count > 3 then (substring safeText 1 2 + "..") else safeText
                 
-                str += "    button btn_tag_" + i as string + " \"" + displayTxt + "\" width:" + btnWidth as string + " height:" + btnHeight as string + " pos:[" + px as string + "," + py as string + "] toolTip:\"" + safeText + "\"\n"
-                str += "    on btn_tag_" + i as string + " rightClick do ( if ro_vcm_main != undefined do ro_vcm_main.removeTag " + i as string + " )\n"
-                str += "    on btn_tag_" + i as string + " pressed do ( if ro_vcm_main != undefined do ro_vcm_main.applyNamePreset " + i as string + " )\n"
+                str += "    button btn_tag_" + (i as string) + " \"" + displayTxt + "\" width:" + (btnWidth as string) + " height:" + (btnHeight as string) + " pos:[" + (px as string) + "," + (py as string) + "] toolTip:\"" + safeText + "\"\n"
+                str += "    on btn_tag_" + (i as string) + " rightClick do ( if ro_vcm_main != undefined do ro_vcm_main.removeTag " + (i as string) + " )\n"
+                str += "    on btn_tag_" + (i as string) + " pressed do ( if ro_vcm_main != undefined do ro_vcm_main.applyNamePreset " + (i as string) + " )\n"
             )
             str += ")\n"
             
@@ -248,15 +318,177 @@ buttonText:"VRayCam"
                     if ckb_auto_name.checked do (
                         local baseName = rx.Replace cam.name "_[0-9]+x[0-9]+\\([0-9\\.]+\\)$" ""
                         local rStr = vcm_getRatioStr w h
-                        cam.name = baseName + "_" + (w as integer) as string + "x" + (h as integer) as string + rStr
+                        cam.name = baseName + "_" + ((w as integer) as string) + "x" + ((h as integer) as string) + rStr
                     )
                 )
             )
             refreshCameraList()
         )
 
+        fn vcm_selectAllCameras = (
+            local sel = #{}
+            for i = 1 to vcm_camList.count do sel[i] = true
+            lb_cams.selection = sel
+            if vcm_camList.count > 0 then (
+                lbl_status.text = "已全选 " + (vcm_camList.count as string) + " 台相机"
+            ) else (
+                lbl_status.text = "没有可选相机"
+            )
+        )
+
+        fn vcm_switchToCameraForRender cam = (
+            local vID = if vcm_lockedViewID > 0 and viewport.numViews >= vcm_lockedViewID then vcm_lockedViewID else viewport.activeViewport
+            try (
+                viewport.activeViewport = vID
+                viewport.setCamera cam
+                completeRedraw()
+            ) catch ()
+        )
+
+        fn vcm_captureViewportBitmap targetW targetH = (
+            undefined
+        )
+
+        fn vcm_saveViewportCapture outFile targetW targetH = (
+            local oldAnimButton = animateMode
+            local oldStart = animationRange.start
+            local oldEnd = animationRange.end
+            local oldFrame = currentTime
+            local ok = false
+
+            try (
+                animationRange = interval currentTime currentTime
+                createPreview outFile outputAVI:false start:currentTime end:currentTime fps:1 percentSize:100 dspGeometry:true dspShapes:true dspLights:false dspCameras:false dspHelpers:false dspParticles:true dspBones:true dspGrid:false dspFrameNums:false dspFrameInfo:false dspAudio:false dspSafeFrame:false
+                ok = doesFileExist outFile
+            ) catch (
+                ok = false
+            )
+
+            animationRange = interval oldStart oldEnd
+            sliderTime = oldFrame
+            if ok != true do throw "视口预览输出失败。"
+            true
+        )
+
+        fn vcm_renderSelectedCameras outDir formatStr = (
+            local selArr = lb_cams.selection as array
+            if selArr.count == 0 then (
+                messageBox "请先在相机列表中选择要批量截图的相机。" title:"批量截图"
+                return false
+            )
+
+            local oldViewport = viewport.activeViewport
+            local oldCamera = undefined
+            local oldRenderWidth = renderWidth
+            local oldRenderHeight = renderHeight
+            local oldSafe = undefined
+            try ( oldCamera = viewport.getCamera oldViewport ) catch ()
+            try ( oldSafe = viewport.GetShowSafeFrame() ) catch ()
+
+            local successCount = 0
+            local skipCount = 0
+            local failCount = 0
+            local skippedNames = #()
+            local failedNames = #()
+            local cancelBatch = false
+
+            for idx in selArr while not cancelBatch do (
+                if idx > 0 and idx <= vcm_camList.count do (
+                    local cam = vcm_camList[idx]
+                    if isValidNode cam then (
+                        local info = vcm_getCameraResInfo cam
+                        if info[1] == undefined or info[2] == undefined then (
+                            skipCount += 1
+                            append skippedNames (cam.name + " [未设置分辨率]")
+                        ) else (
+                            local outFile = vcm_buildOutputFilePath cam outDir formatStr
+                            if doesFileExist outFile do (
+                                case (vcm_confirmOverwrite outFile) of (
+                                    #skip: (
+                                        skipCount += 1
+                                        append skippedNames (cam.name + " [文件已存在]")
+                                        outFile = undefined
+                                    )
+                                    #cancel: (
+                                        cancelBatch = true
+                                        outFile = undefined
+                                    )
+                                )
+                            )
+
+                            if outFile != undefined and not cancelBatch do (
+                                local w = info[1] as integer
+                                local h = info[2] as integer
+                                lbl_status.text = "截图: " + cam.name + "  " + (w as string) + "x" + (h as string)
+
+                                renderWidth = w
+                                renderHeight = h
+                                renderSceneDialog.update()
+                                vcm_switchToCameraForRender cam
+                                try(viewport.SetShowSafeFrame true)catch()
+                                completeRedraw()
+                                windows.processPostedMessages()
+
+                                try (
+                                    vcm_saveViewportCapture outFile w h
+                                    successCount += 1
+                                ) catch (
+                                    failCount += 1
+                                    append failedNames (cam.name + " [" + (getCurrentException()) + "]")
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+
+            renderWidth = oldRenderWidth
+            renderHeight = oldRenderHeight
+            renderSceneDialog.update()
+            try (
+                viewport.activeViewport = oldViewport
+                if oldCamera != undefined then viewport.setCamera oldCamera
+                if oldSafe != undefined then viewport.SetShowSafeFrame oldSafe
+                completeRedraw()
+            ) catch ()
+
+            lbl_status.text = "完成: 成功 " + (successCount as string) + " / 跳过 " + (skipCount as string) + " / 失败 " + (failCount as string)
+
+            local summary = "批量截图完成。"
+            if cancelBatch do summary += "\n\n任务已被用户中断。"
+            summary += "\n\n成功: " + (successCount as string)
+            summary += "\n跳过: " + (skipCount as string)
+            summary += "\n失败: " + (failCount as string)
+            if skippedNames.count > 0 do summary += "\n\n跳过列表:\n" + vcm_joinNameList skippedNames
+            if failedNames.count > 0 do summary += "\n\n失败列表:\n" + vcm_joinNameList failedNames
+            messageBox summary title:"批量截图"
+
+            true
+        )
+
         fn updateAspectUI = ( if sp_rh.value != 0 do sp_aspect.value = (sp_rw.value as float) / sp_rh.value )
-        fn refreshPresetsUI = ( lb_presets.items = for p in vcm_presetArr collect (p[1] as string + "x" + p[2] as string + " " + vcm_getRatioStr p[1] p[2]) )
+        fn refreshPresetsUI = ( lb_presets.items = for p in vcm_presetArr collect ((p[1] as string) + "x" + (p[2] as string) + " " + vcm_getRatioStr p[1] p[2]) )
+        
+        fn setCompactMode state = (
+            vcm_compactMode = state
+            btn_toggle_panel.text = if state then "展开" else "收起"
+
+            local showAdvanced = not state
+            local advancedControls = #(
+                btn_refresh, ckb_sort_name, ckb_auto_name, btn_help,
+                btn_select_all, btn_batch_capture, ddl_capture_format, lbl_status,
+                lbl_div1, lb_presets,
+                sp_rw, btn_swap, sp_rh,
+                sp_aspect, btn_x2, btn_div2, ckb_lock,
+                btn_add, btn_del, btn_app,
+                lbl_div2, et_name, btn_rename, btn_add_tag, sub_tags,
+                btn_save
+            )
+
+            for ctrl in advancedControls do ctrl.visible = showAdvanced
+            ro_vcm_main.height = if state then vcm_dialogCompactHeight else vcm_dialogFullHeight
+            windows.processPostedMessages()
+        )
 
         on ro_vcm_main open do ( 
             ckb_auto_name.checked = vcm_autoName
@@ -264,6 +496,8 @@ buttonText:"VRayCam"
             refreshPresetsUI(); updateAspectUI(); refreshCameraList() 
             rebuildTagsUI()
             ckb_lock_render.checked = not rendUseActiveView
+            vcm_dialogFullHeight = ro_vcm_main.height
+            setCompactMode vcm_compactMode
             callbacks.addScript #selectionSetChanged "vcm_syncSelectionFromScene()" id:#vcm_sync_sel
         )
 
@@ -283,7 +517,7 @@ buttonText:"VRayCam"
                         if info[1] != undefined do (
                             local w = info[1] as integer; local h = info[2] as integer
                             local baseName = rx.Replace cam.name "_[0-9]+x[0-9]+\\([0-9\\.]+\\)$" ""
-                            cam.name = baseName + "_" + w as string + "x" + h as string + vcm_getRatioStr w h
+                            cam.name = baseName + "_" + (w as string) + "x" + (h as string) + vcm_getRatioStr w h
                         )
                     )
                     refreshCameraList()
@@ -291,20 +525,25 @@ buttonText:"VRayCam"
             )
         )
 
-        on lb_cams selected idx do ( if idx > 0 do ( local info = vcm_getCameraResInfo vcm_camList[idx]; if info[1] != undefined do lbl_status.text = "选: " + (info[1] as integer) as string + "x" + (info[2] as integer) as string ) )
+        on lb_cams selected idx do ( if idx > 0 do ( local info = vcm_getCameraResInfo vcm_camList[idx]; if info[1] != undefined do lbl_status.text = "选: " + ((info[1] as integer) as string) + "x" + ((info[2] as integer) as string) ) )
+        on btn_select_all pressed do vcm_selectAllCameras()
+        on btn_batch_capture pressed do (
+            local outDir = vcm_pickOutputFolder()
+            if outDir != undefined and outDir != "" do vcm_renderSelectedCameras outDir ddl_capture_format.items[ddl_capture_format.selection]
+        )
         on lb_cams rightClick idx do ( 
             if idx > 0 do ( 
                 lb_cams.selection = #{idx} 
                 local info = vcm_getCameraResInfo vcm_camList[idx]
                 if info[1] != undefined do ( 
                     renderWidth = info[1]; renderHeight = info[2]; renderSceneDialog.update() 
-                    lbl_status.text = "选: " + (info[1] as integer) as string + "x" + (info[2] as integer) as string
+                    lbl_status.text = "选: " + ((info[1] as integer) as string) + "x" + ((info[2] as integer) as string)
                 )
                 local vID = if vcm_lockedViewID > 0 and viewport.numViews >= vcm_lockedViewID then vcm_lockedViewID else viewport.activeViewport
                 try(viewport.activeViewport = vID; viewport.setCamera vcm_camList[idx]; completeRedraw())catch() 
             ) 
         )
-        on btn_lock_view pressed do ( vcm_lockedViewID = viewport.activeViewport; lbl_status.text = "已锁定视口: " + vcm_lockedViewID as string )
+        on btn_lock_view pressed do ( vcm_lockedViewID = viewport.activeViewport; lbl_status.text = "已锁定视口: " + (vcm_lockedViewID as string) )
         on btn_refresh pressed do refreshCameraList()
         on lb_cams doubleClicked idx do ( 
             if idx > 0 do (
@@ -313,7 +552,7 @@ buttonText:"VRayCam"
                 try(viewport.activeViewport = vID; viewport.setCamera vcm_camList[idx]; completeRedraw())catch() 
             )
         )
-        on btn_help pressed do messageBox "操作说明:\n\n【动态标签预设】(修改版)\n- 在输入框打字（如“客厅”），点击【?标签】即可生成一个新的标签按钮。\n- 标签数量不限，超出显示范围会自动出现滚动条。\n- 左键点击标签：直接批量重命名选中相机。\n- 右键点击标签：永久删除该标签。\n\n【排序功能】\n- 勾选“排序”按钮，列表中相机将按名称拼音/字母强制排列。" title:"帮助"
+        on btn_help pressed do messageBox "操作说明:\n\n【界面折叠】\n- 点击顶部【收起】按钮，可折叠相机列表以下的扩展面板。\n- 收起后只保留相机切换与列表区域，适合简洁浏览。\n\n【批量截图】\n- 在相机列表中按 Ctrl / Shift 多选，或点击【全选】。\n- 点击【批量截图】后选择输出目录，脚本会按相机自己的分辨率逐个抓取当前视口。\n- 图片文件名默认与相机同名。\n- 没有独立分辨率的相机会被跳过，避免比例出错。\n\n【动态标签预设】\n- 在输入框打字（如“客厅”），点击【?标签】即可生成一个新的标签按钮。\n- 标签数量不限，超出显示范围会自动出现滚动条。\n- 左键点击标签：直接批量重命名选中相机。\n- 右键点击标签：永久删除该标签。\n\n【排序功能】\n- 勾选“排序”按钮，列表中相机将按名称拼音/字母强制排列。" title:"帮助"
 
         on lb_presets rightClick idx do ( if idx > 0 do applyResToSelectedCamera vcm_presetArr[idx][1] vcm_presetArr[idx][2] )
         on btn_swap pressed do ( local t = sp_rw.value; sp_rw.value = sp_rh.value; sp_rh.value = t; updateAspectUI() )
@@ -343,6 +582,7 @@ buttonText:"VRayCam"
             ) 
         )
         on btn_save pressed do ( applyResToSelectedCamera renderWidth renderHeight )
+        on btn_toggle_panel pressed do ( setCompactMode (not vcm_compactMode); vcm_saveSettings() )
 
         on btn_add_tag pressed do (
             local txt = trimRight (trimLeft et_name.text)
@@ -363,7 +603,23 @@ buttonText:"VRayCam"
         )
     )
 
-    createDialog ro_vcm_main 240 760 style:#(#style_titlebar, #style_sysmenu, #style_toolwindow)
+    createDialog ro_vcm_main 240 810 style:#(#style_titlebar, #style_sysmenu, #style_toolwindow)
 )
 
 macros.run "_编码助手Tools" "VRayCamManager"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
