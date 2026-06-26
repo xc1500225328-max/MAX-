@@ -89,7 +89,7 @@ buttonText:"VRayCam"
     )
     vcm_loadPresets()
 
-    rollout ro_vcm_main "VRay 相机助手 v28.7" (
+    rollout ro_vcm_main "VRay 相机助手 v28.8" (
         button btn_lock_view "锁定切换视口" width:82 height:22 across:3 align:#left offset:[0,5]
         checkbutton ckb_lock_render "锁定渲染视口" width:82 height:22 align:#left offset:[0,5] highlightColor:(color 255 100 100) 
         button btn_toggle_panel "收起" width:40 height:22 align:#right offset:[0,5] toolTip:"折叠或展开相机列表以下的面板"
@@ -103,7 +103,7 @@ buttonText:"VRayCam"
 
         button btn_select_all "全选" width:102 height:22 across:2 align:#left offset:[0,4]
         button btn_batch_capture "批量截图" width:102 height:22 align:#right offset:[0,4]
-        dropdownlist ddl_capture_format "格式" items:#("JPG", "PNG", "TIF") selection:1 width:210 height:18 offset:[0,2]
+        label lbl_capture_format "输出: JPG 质量100" width:210 height:18 offset:[0,2]
         
         label lbl_status "准备就绪" style_sunkenedge:true width:210 height:18 color:green offset:[0,2]
 
@@ -159,30 +159,29 @@ buttonText:"VRayCam"
             sanitized
         )
 
-        fn vcm_getFormatExt formatStr = (
-            case (toLower formatStr) of (
-                "jpg": ".jpg"
-                "png": ".png"
-                "tif": ".tif"
-                default: ".jpg"
-            )
-        )
-
-        fn vcm_buildOutputFilePath cam outDir formatStr = (
+        fn vcm_buildOutputFilePath cam outDir = (
             local dirPath = outDir
             if dirPath.count > 0 and dirPath[dirPath.count] != "\\" do dirPath += "\\"
-            dirPath + (vcm_sanitizeFileName cam.name) + (vcm_getFormatExt formatStr)
+            dirPath + (vcm_sanitizeFileName cam.name) + ".jpg"
         )
 
-        fn vcm_confirmOverwrite filePath = (
-            dotNet.loadAssembly "System.Windows.Forms"
-            local dr = dotNetClass "System.Windows.Forms.DialogResult"
-            local mb = dotNetClass "System.Windows.Forms.MessageBox"
-            local mbb = dotNetClass "System.Windows.Forms.MessageBoxButtons"
-            local mbi = dotNetClass "System.Windows.Forms.MessageBoxIcon"
-            local msg = "文件已存在：\n" + filePath + "\n\n是：覆盖当前文件\n否：跳过当前文件\n取消：终止整个批量任务"
-            local result = mb.Show msg "批量截图" mbb.YesNoCancel mbi.Question
-            if result == dr.Yes then #overwrite else if result == dr.No then #skip else #cancel
+        fn vcm_getUniqueOutputFilePath filePath = (
+            if not (doesFileExist filePath) do return filePath
+
+            local dirPath = getFilenamePath filePath
+            local baseName = getFilenameFile filePath
+            local ext = getFilenameType filePath
+            local i = 1
+            local newPath = filePath
+
+            while doesFileExist newPath do (
+                local suffix = i as string
+                while suffix.count < 3 do suffix = "0" + suffix
+                newPath = dirPath + baseName + "_" + suffix + ext
+                i += 1
+            )
+
+            newPath
         )
 
         fn vcm_pickOutputFolder = (
@@ -345,32 +344,46 @@ buttonText:"VRayCam"
             ) catch ()
         )
 
-        fn vcm_captureViewportBitmap targetW targetH = (
-            undefined
-        )
-
-        fn vcm_saveViewportCapture outFile targetW targetH = (
-            local oldAnimButton = animateMode
-            local oldStart = animationRange.start
-            local oldEnd = animationRange.end
-            local oldFrame = currentTime
-            local ok = false
-
-            try (
-                animationRange = interval currentTime currentTime
-                createPreview outFile outputAVI:false start:currentTime end:currentTime fps:1 percentSize:100 dspGeometry:true dspShapes:true dspLights:false dspCameras:false dspHelpers:false dspParticles:true dspBones:true dspGrid:false dspFrameNums:false dspFrameInfo:false dspAudio:false dspSafeFrame:false
-                ok = doesFileExist outFile
-            ) catch (
-                ok = false
-            )
-
-            animationRange = interval oldStart oldEnd
-            sliderTime = oldFrame
-            if ok != true do throw "视口预览输出失败。"
+        fn vcm_setJpegQuality100 = (
+            try (jpegio.setQuality 100) catch ()
+            try (jpgio.setQuality 100) catch ()
             true
         )
 
-        fn vcm_renderSelectedCameras outDir formatStr = (
+        fn vcm_saveViewportCapture outFile targetW targetH = (
+            local oldFrame = currentTime
+            local previewFrame = 0f
+            local ok = false
+            local errMsg = ""
+
+            vcm_setJpegQuality100()
+
+            try (
+                sliderTime = previewFrame
+                renderWidth = targetW
+                renderHeight = targetH
+                renderSceneDialog.update()
+                completeRedraw()
+                windows.processPostedMessages()
+
+                createPreview filename:outFile outputAVI:false start:previewFrame end:previewFrame skip:1 fps:30 percentSize:100 dspGeometry:true dspShapes:true dspLights:false dspCameras:false dspHelpers:false dspSpaceWarps:false dspParticles:false dspBones:false dspGrid:false dspFrameNums:false dspFrameInfo:false dspAudio:false dspSafeFrame:false dspBkg:true useMPCamEffect:false dspCamViewName:false autoPlay:false vpPreset:#userDefined vpEdgedFaces:false vpTextures:true
+                ok = true
+            ) catch (
+                errMsg = getCurrentException()
+                ok = false
+            )
+
+            sliderTime = oldFrame
+
+            if ok != true do (
+                if errMsg == "" do errMsg = "创建预览动画输出失败。"
+                throw errMsg
+            )
+
+            true
+        )
+
+        fn vcm_renderSelectedCameras outDir = (
             local selArr = lb_cams.selection as array
             if selArr.count == 0 then (
                 messageBox "请先在相机列表中选择要批量截图的相机。" title:"批量截图"
@@ -401,20 +414,8 @@ buttonText:"VRayCam"
                             skipCount += 1
                             append skippedNames (cam.name + " [未设置分辨率]")
                         ) else (
-                            local outFile = vcm_buildOutputFilePath cam outDir formatStr
-                            if doesFileExist outFile do (
-                                case (vcm_confirmOverwrite outFile) of (
-                                    #skip: (
-                                        skipCount += 1
-                                        append skippedNames (cam.name + " [文件已存在]")
-                                        outFile = undefined
-                                    )
-                                    #cancel: (
-                                        cancelBatch = true
-                                        outFile = undefined
-                                    )
-                                )
-                            )
+                            local outFile = vcm_getUniqueOutputFilePath (vcm_buildOutputFilePath cam outDir)
+                            -- 重名文件已在生成路径时自动避让。
 
                             if outFile != undefined and not cancelBatch do (
                                 local w = info[1] as integer
@@ -425,7 +426,7 @@ buttonText:"VRayCam"
                                 renderHeight = h
                                 renderSceneDialog.update()
                                 vcm_switchToCameraForRender cam
-                                try(viewport.SetShowSafeFrame true)catch()
+                                try(viewport.SetShowSafeFrame false)catch()
                                 completeRedraw()
                                 windows.processPostedMessages()
 
@@ -476,7 +477,7 @@ buttonText:"VRayCam"
             local showAdvanced = not state
             local advancedControls = #(
                 btn_refresh, ckb_sort_name, ckb_auto_name, btn_help,
-                btn_select_all, btn_batch_capture, ddl_capture_format, lbl_status,
+                btn_select_all, btn_batch_capture, lbl_capture_format, lbl_status,
                 lbl_div1, lb_presets,
                 sp_rw, btn_swap, sp_rh,
                 sp_aspect, btn_x2, btn_div2, ckb_lock,
@@ -529,7 +530,7 @@ buttonText:"VRayCam"
         on btn_select_all pressed do vcm_selectAllCameras()
         on btn_batch_capture pressed do (
             local outDir = vcm_pickOutputFolder()
-            if outDir != undefined and outDir != "" do vcm_renderSelectedCameras outDir ddl_capture_format.items[ddl_capture_format.selection]
+            if outDir != undefined and outDir != "" do vcm_renderSelectedCameras outDir
         )
         on lb_cams rightClick idx do ( 
             if idx > 0 do ( 
