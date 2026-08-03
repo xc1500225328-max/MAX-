@@ -4,7 +4,7 @@
     用法：
     1. 在 3ds Max 中执行 Scripting > Run Script，选择本文件。
     2. 重启 3ds Max，或直接到 Customize User Interface 中刷新查看。
-    3. 在 Toolbars 页签里选择 Category: 编码助手工具，把 5 个命令拖到任意工具条。
+    3. 在 Toolbars 页签里选择 Category: 编码助手工具，把 7 个命令拖到任意工具条。
 */
 
 (
@@ -15,8 +15,10 @@
     local packageRoot = sourceRoot + "3dsMaxToolbarPackage\\"
 
     local scripts = #(
-        #("CA_ACESConverter", "ACES", "ACEScg 助手", "ACES转换脚本.ms", "ca_aces_v2"),
-        #("CA_LightControl", "灯光", "V-Ray 灯光控制", "灯光控制.ms", "ca_light_v2"),
+        #("CA_ACESConverter", "ACES v14.3", "ACEScg 助手 v14.3：转换、VRayColor 原色与凹凸修复", "ACES转换脚本.ms", "ca_aces_v2"),
+        #("CA_LightControl", "灯光", "V-Ray 灯光与 VRay/Corona 自发光控制", "灯光控制.ms", "ca_light_v2"),
+        #("CA_MaterialMerger", "材质合并", "扫描并安全合并重复材质", "材质合并.ms", "ca_material_merge_v1"),
+        #("CA_GroupSorter", "组排序", "组模型统计、排序与单对象组清理", "组排序.ms", "ca_group_sort_v1"),
         #("CA_RenderableControl", "渲染", "物体可渲染控制", "物体可渲染控制.ms", "ca_renderable_v2"),
         #("CA_VRayCamManager", "相机", "VRay 相机管理助手", "相机列表VR专用版.ms", "ca_camera_v2"),
         #("CA_TimeJump", "跳帧", "灵感时间控制器", "跳转帧.ms", "ca_timejump_v2")

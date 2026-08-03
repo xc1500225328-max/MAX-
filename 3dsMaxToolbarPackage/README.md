@@ -6,9 +6,11 @@
 2. 执行 `Scripting > Run Script...`。
 3. 选择工作目录里的 `安装到3dsMax工具条.ms`。
 4. 安装完成后，打开 `Customize > Customize User Interface > Toolbars`。
-5. 在 `Category` 里选择 `编码助手工具`，把下面 5 个命令拖到任意工具条：
-   - `ACES`
+5. 在 `Category` 里选择 `编码助手工具`，把下面 7 个命令拖到任意工具条：
+   - `ACES v14.3`
    - `灯光`
+   - `材质合并`
+   - `组排序`
    - `渲染`
    - `相机`
    - `跳帧`
