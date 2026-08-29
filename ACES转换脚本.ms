@@ -7,7 +7,7 @@
 3. 支持 Standard Bitmap 转换为 VRayBitmap，并保留剪切/放置参数。
 4. 递归扫描嵌套贴图，对多层包装节点里的位图同样生效。
 5. 修复 VRayColor：将 RGB 原色强制设为 0 (Raw)。
-6. 修复 凹凸贴图：为 V-Ray GPU 兼容，自动将其包裹进 VRayColor2Bump。
+6. 修复 凹凸贴图：普通凹凸贴图直接包裹，法线节点仅处理内部 bump_map。
 7. [修复] 弹窗仅统计发生真实参数变动的贴图，重复转换不再计入数量。
 ======================================================================
 */
@@ -35,7 +35,7 @@ rollout rol_ACESConverter "ACEScg 助手 v14.3" width:250
     (
         checkbox chk_fixVRayColor "VRayColor 原色设为无 (Raw)" checked:false height:18 tooltip:"强制将 VRayColor 的 [RGB primaries] 设为 0 (Raw)。\n(解决色彩空间过曝问题)"
         
-        checkbox chk_fixBump "V-Ray GPU 凹凸兼容修复" checked:false width:135 across:2 tooltip:"将凹凸通道的贴图统一包裹进 VRayColor2Bump 节点。\n(解决 GPU 渲染时的凹凸计算问题)"
+        checkbox chk_fixBump "V-Ray GPU 凹凸兼容修复" checked:false width:135 across:2 tooltip:"普通凹凸贴图将包裹进 VRayColor2Bump。\nVRayNormalMap / Normal Bump 只处理内部凹凸贴图，不改变法线贴图。"
         spinner spn_bumpHeight "" range:[0.001, 100.0, 1.0] type:#float width:50 align:#right tooltip:"设置包裹后的高度倍增值"
     )
 
@@ -301,19 +301,69 @@ rollout rol_ACESConverter "ACEScg 助手 v14.3" width:250
     )
     
     -- === 凹凸兼容修复逻辑 ===
+    -- 法线节点已经负责解析向量数据，外层不能再转换成高度凹凸
+    fn isNormalMapNode mapNode =
+    (
+        if mapNode == undefined then return false
+
+        local className = toLower ((classOf mapNode) as string)
+        className = substituteString className "_" ""
+        className = substituteString className " " ""
+
+        return className == "normalbump" or (findString className "vraynormalmap") == 1
+    )
+
+    fn wrapNormalNodeBump normalNode bumpHeight =
+    (
+        if not (hasProperty normalNode "bump_map") then return false
+
+        local originalBumpMap = getProperty normalNode #bump_map
+        if originalBumpMap == undefined or (classOf originalBumpMap) == VRayColor2Bump then return false
+
+        local color2Bump = VRayColor2Bump()
+        if hasProperty color2Bump "map" do color2Bump.map = originalBumpMap
+        if hasProperty color2Bump "height" do color2Bump.height = bumpHeight
+        setProperty normalNode #bump_map color2Bump
+        return true
+    )
+
     fn applyBumpFix targetMtlList bumpHeight =
     (
         local count = 0
         for mat in targetMtlList do
         (
-            if isProperty mat "texmap_bump" and mat.texmap_bump != undefined and (classOf mat.texmap_bump) != VRayColor2Bump do
+            if isProperty mat "texmap_bump" and mat.texmap_bump != undefined do
             (
                 local originalMap = mat.texmap_bump
-                local color2Bump = VRayColor2Bump()
-                if hasProperty color2Bump "map" do color2Bump.map = originalMap
-                if hasProperty color2Bump "height" do color2Bump.height = bumpHeight
-                mat.texmap_bump = color2Bump
-                count += 1
+                local normalNode = undefined
+                local changed = false
+
+                if isNormalMapNode originalMap then
+                (
+                    normalNode = originalMap
+                )
+                else if (classOf originalMap) == VRayColor2Bump and hasProperty originalMap "map" and isNormalMapNode originalMap.map then
+                (
+                    -- 修复旧版脚本可能形成的错误外层包裹
+                    normalNode = originalMap.map
+                    mat.texmap_bump = normalNode
+                    changed = true
+                )
+
+                if normalNode != undefined then
+                (
+                    if wrapNormalNodeBump normalNode bumpHeight do changed = true
+                )
+                else if (classOf originalMap) != VRayColor2Bump then
+                (
+                    local color2Bump = VRayColor2Bump()
+                    if hasProperty color2Bump "map" do color2Bump.map = originalMap
+                    if hasProperty color2Bump "height" do color2Bump.height = bumpHeight
+                    mat.texmap_bump = color2Bump
+                    changed = true
+                )
+
+                if changed do count += 1
             )
         )
         return count
@@ -433,7 +483,7 @@ rollout rol_ACESConverter "ACEScg 助手 v14.3" width:250
         msg += "转为 Data  空间贴图: " + (results[2] as string) + " 个\n"
         
         if doVRayColorFix do msg += "修复 VRayColor (Raw): " + (vColorCount as string) + " 个\n"
-        if doBumpFix do msg += "包裹凹凸贴图节点: " + (bumpCount as string) + " 个\n"
+        if doBumpFix do msg += "修复凹凸贴图节点: " + (bumpCount as string) + " 个\n"
         
         msg += "\n(本次共扫描材质球: " + (targetMtls.count as string) + " 个)"
         

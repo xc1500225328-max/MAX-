@@ -1,6 +1,7 @@
-/* VRay 相机管理助手 v28.6 (比例锁定Bug修复版)
-   1. [修复] 修复了手动修改比例后点击锁定按钮，比例会被旧宽高重置的Bug。
-   2. [优化] 无论锁定与否，修改比例(R)时，高度(H)都会实时自动推算。
+/* VRay 相机管理助手 v28.9
+   1. [新增] 可将列表中选中的相机一键移入“相机层”，图层不存在时自动创建。
+   2. [修复] 修复了手动修改比例后点击锁定按钮，比例会被旧宽高重置的Bug。
+   3. [优化] 无论锁定与否，修改比例(R)时，高度(H)都会实时自动推算。
    作者：编码助手
 */
 
@@ -14,7 +15,7 @@ global vcm_lockedViewID = 0
 global vcm_autoName = false 
 global vcm_sortByName = false 
 global vcm_compactMode = false
-global vcm_dialogFullHeight = 810
+global vcm_dialogFullHeight = 838
 global vcm_dialogCompactHeight = 300
 global vcm_iniPath = getDir #plugcfg + "\\VRayCamPro_Presets.ini"
 
@@ -89,7 +90,7 @@ buttonText:"VRayCam"
     )
     vcm_loadPresets()
 
-    rollout ro_vcm_main "VRay 相机助手 v28.8" (
+    rollout ro_vcm_main "VRay 相机助手 v28.9" (
         button btn_lock_view "锁定切换视口" width:82 height:22 across:3 align:#left offset:[0,5]
         checkbutton ckb_lock_render "锁定渲染视口" width:82 height:22 align:#left offset:[0,5] highlightColor:(color 255 100 100) 
         button btn_toggle_panel "收起" width:40 height:22 align:#right offset:[0,5] toolTip:"折叠或展开相机列表以下的面板"
@@ -103,6 +104,7 @@ buttonText:"VRayCam"
 
         button btn_select_all "全选" width:102 height:22 across:2 align:#left offset:[0,4]
         button btn_batch_capture "批量截图" width:102 height:22 align:#right offset:[0,4]
+        button btn_move_to_camera_layer "移入相机层" width:210 height:22 offset:[0,2] toolTip:"将列表中选中的相机移入“相机层”，图层不存在时自动创建"
         label lbl_capture_format "输出: JPG 质量100" width:210 height:18 offset:[0,2]
         
         label lbl_status "准备就绪" style_sunkenedge:true width:210 height:18 color:green offset:[0,2]
@@ -238,6 +240,44 @@ buttonText:"VRayCam"
             )
             lb_cams.selection = oldSel
             lbl_status.text = "F10: " + (renderWidth as string) + "x" + (renderHeight as string) + " " + vcm_getRatioStr renderWidth renderHeight
+        )
+
+        fn moveSelectedCamerasToCameraLayer = (
+            local selectedIndices = lb_cams.selection as array
+            if selectedIndices.count == 0 then (
+                messageBox "请先在相机列表中选择要归层的相机。" title:"移入相机层"
+                false
+            ) else (
+                local cameraLayer = LayerManager.getLayerFromName "相机层"
+                if cameraLayer == undefined do cameraLayer = LayerManager.newLayerFromName "相机层"
+
+                if cameraLayer == undefined then (
+                    messageBox "无法创建或获取“相机层”。" title:"移入相机层"
+                    false
+                ) else (
+                    local movedCount = 0
+                    local failedNames = #()
+                    undo "Move Cameras To Camera Layer" on (
+                        for idx in selectedIndices where idx <= vcm_camList.count do (
+                            local cam = vcm_camList[idx]
+                            if isValidNode cam then (
+                                try (
+                                    cameraLayer.addNode cam
+                                    movedCount += 1
+                                ) catch (
+                                    append failedNames cam.name
+                                )
+                            )
+                        )
+                    )
+
+                    lbl_status.text = "已移入相机层: " + (movedCount as string) + " 台"
+                    if failedNames.count > 0 do (
+                        messageBox ("以下相机移动失败:\n" + vcm_joinNameList failedNames) title:"移入相机层"
+                    )
+                    movedCount > 0
+                )
+            )
         )
 
         fn applyNamePreset idx = (
@@ -477,7 +517,7 @@ buttonText:"VRayCam"
             local showAdvanced = not state
             local advancedControls = #(
                 btn_refresh, ckb_sort_name, ckb_auto_name, btn_help,
-                btn_select_all, btn_batch_capture, lbl_capture_format, lbl_status,
+                btn_select_all, btn_batch_capture, btn_move_to_camera_layer, lbl_capture_format, lbl_status,
                 lbl_div1, lb_presets,
                 sp_rw, btn_swap, sp_rh,
                 sp_aspect, btn_x2, btn_div2, ckb_lock,
@@ -528,6 +568,7 @@ buttonText:"VRayCam"
 
         on lb_cams selected idx do ( if idx > 0 do ( local info = vcm_getCameraResInfo vcm_camList[idx]; if info[1] != undefined do lbl_status.text = "选: " + ((info[1] as integer) as string) + "x" + ((info[2] as integer) as string) ) )
         on btn_select_all pressed do vcm_selectAllCameras()
+        on btn_move_to_camera_layer pressed do moveSelectedCamerasToCameraLayer()
         on btn_batch_capture pressed do (
             local outDir = vcm_pickOutputFolder()
             if outDir != undefined and outDir != "" do vcm_renderSelectedCameras outDir
@@ -553,7 +594,7 @@ buttonText:"VRayCam"
                 try(viewport.activeViewport = vID; viewport.setCamera vcm_camList[idx]; completeRedraw())catch() 
             )
         )
-        on btn_help pressed do messageBox "操作说明:\n\n【界面折叠】\n- 点击顶部【收起】按钮，可折叠相机列表以下的扩展面板。\n- 收起后只保留相机切换与列表区域，适合简洁浏览。\n\n【批量截图】\n- 在相机列表中按 Ctrl / Shift 多选，或点击【全选】。\n- 点击【批量截图】后选择输出目录，脚本会按相机自己的分辨率逐个抓取当前视口。\n- 图片文件名默认与相机同名。\n- 没有独立分辨率的相机会被跳过，避免比例出错。\n\n【动态标签预设】\n- 在输入框打字（如“客厅”），点击【?标签】即可生成一个新的标签按钮。\n- 标签数量不限，超出显示范围会自动出现滚动条。\n- 左键点击标签：直接批量重命名选中相机。\n- 右键点击标签：永久删除该标签。\n\n【排序功能】\n- 勾选“排序”按钮，列表中相机将按名称拼音/字母强制排列。" title:"帮助"
+        on btn_help pressed do messageBox "操作说明:\n\n【界面折叠】\n- 点击顶部【收起】按钮，可折叠相机列表以下的扩展面板。\n- 收起后只保留相机切换与列表区域，适合简洁浏览。\n\n【相机归层】\n- 在相机列表中选择一台或多台相机，点击【移入相机层】。\n- 脚本会把选中的相机移入“相机层”；该图层不存在时自动创建。\n\n【批量截图】\n- 在相机列表中按 Ctrl / Shift 多选，或点击【全选】。\n- 点击【批量截图】后选择输出目录，脚本会按相机自己的分辨率逐个抓取当前视口。\n- 图片文件名默认与相机同名。\n- 没有独立分辨率的相机会被跳过，避免比例出错。\n\n【动态标签预设】\n- 在输入框打字（如“客厅”），点击【?标签】即可生成一个新的标签按钮。\n- 标签数量不限，超出显示范围会自动出现滚动条。\n- 左键点击标签：直接批量重命名选中相机。\n- 右键点击标签：永久删除该标签。\n\n【排序功能】\n- 勾选“排序”按钮，列表中相机将按名称拼音/字母强制排列。" title:"帮助"
 
         on lb_presets rightClick idx do ( if idx > 0 do applyResToSelectedCamera vcm_presetArr[idx][1] vcm_presetArr[idx][2] )
         on btn_swap pressed do ( local t = sp_rw.value; sp_rw.value = sp_rh.value; sp_rh.value = t; updateAspectUI() )
@@ -604,7 +645,7 @@ buttonText:"VRayCam"
         )
     )
 
-    createDialog ro_vcm_main 240 810 style:#(#style_titlebar, #style_sysmenu, #style_toolwindow)
+    createDialog ro_vcm_main 240 838 style:#(#style_titlebar, #style_sysmenu, #style_toolwindow)
 )
 
 macros.run "_编码助手Tools" "VRayCamManager"

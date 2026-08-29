@@ -1,6 +1,6 @@
 try(destroyDialog AdvancedMatMerger) catch()
 
-rollout AdvancedMatMerger "智能材质合并工具 (两步安全版)" width:320 height:290
+rollout AdvancedMatMerger "智能材质合并工具 (专业统计版)" width:320 height:350
 (
     -- ==================== 存储数据的变量 ====================
     local mergePairs_cache = #()    -- 缓存要合并的材质对，格式：#( 旧材质, 新材质 )
@@ -20,8 +20,10 @@ rollout AdvancedMatMerger "智能材质合并工具 (两步安全版)" width:320 height:290
     button btn_scan "第一步: 扫描分析" pos:[10,195] width:145 height:40
     button btn_merge "第二步: 确认合并" pos:[165,195] width:145 height:40 enabled:false
     
-    progressBar pb_bar "进度" pos:[10,245] width:300 height:15 color:green value:0
-    label lbl_status "等待操作..." pos:[10,265] width:300 align:#center
+    button btn_sel_dup "选择含重复材质的模型" pos:[10,245] width:300 height:30 enabled:false
+    
+    progressBar pb_bar "进度" pos:[10,285] width:300 height:15 color:green value:0
+    label lbl_status "等待操作..." pos:[10,305] width:300 align:#center
 
     -- ==================== 核心逻辑函数 ====================
     
@@ -104,6 +106,22 @@ rollout AdvancedMatMerger "智能材质合并工具 (两步安全版)" width:320 height:290
         )
     )
 
+    -- 检查某个材质及其子材质是否在给定的列表中
+    fn hasOldMat targetMat oldMatsList visited: = (
+        if visited == unsupplied do visited = #()
+        if targetMat == undefined do return false
+        if findItem visited targetMat > 0 do return false
+        append visited targetMat
+        
+        if findItem oldMatsList targetMat > 0 do return true
+        
+        for i = 1 to getNumSubMtls targetMat do (
+            local subMat = getSubMtl targetMat i
+            if hasOldMat subMat oldMatsList visited:visited do return true
+        )
+        return false
+    )
+
     -- ==================== 第一步：扫描分析 ====================
     on btn_scan pressed do (
         if not chk_name.checked and not chk_param.checked and not chk_tex.checked do (
@@ -114,6 +132,7 @@ rollout AdvancedMatMerger "智能材质合并工具 (两步安全版)" width:320 height:290
         -- 初始化界面状态和缓存
         btn_scan.enabled = false
         btn_merge.enabled = false
+        btn_sel_dup.enabled = false
         mergePairs_cache = #()
         targetObjs_cache = #()
         isTargetedScope = chk_visible.checked  -- 记住扫描时的“作用范围”设置
@@ -148,7 +167,7 @@ rollout AdvancedMatMerger "智能材质合并工具 (两步安全版)" width:320 height:290
             for u in uniqueMats do (
                 if compareMats m u chk_name.checked chk_param.checked chk_tex.checked then (
                     isDuplicate = true
-                    -- 发现相同材质，将其存入后台记事本，等待第二步执行
+                    -- 发现相同材质，将其存入后台缓存，等待第二步执行
                     append mergePairs_cache #(m, u) 
                     exit
                 )
@@ -162,12 +181,63 @@ rollout AdvancedMatMerger "智能材质合并工具 (两步安全版)" width:320 height:290
         btn_scan.enabled = true
         
         if mergePairs_cache.count > 0 then (
-            lbl_status.text = "扫描完成！发现 " + (mergePairs_cache.count as string) + " 个重复材质可合并。"
+            -- 计算统计数据
+            local uniqueTargets = #()
+            for pair in mergePairs_cache do appendIfUnique uniqueTargets pair[2]
+            
+            local mergeableCount = mergePairs_cache.count          -- 将被消灭（合并）的材质数
+            local targetCount = uniqueTargets.count                -- 这些重复材质指向的主材质数
+            local totalDupInvolved = mergeableCount + targetCount  -- 参与重复的总材质数
+            
+            local remainCount = uniqueMats.count                   -- 最终整个场景剩余独立材质数
+            local totalCount = total                               -- 扫描到的总数量
+            
+            lbl_status.text = "扫描完成！可合并:" + (mergeableCount as string) + " 剩余:" + (remainCount as string)
             btn_merge.enabled = true  -- 只有发现重复材质时，才允许点击第二步
-            messageBox ("分析完成！\n发现了 " + (mergePairs_cache.count as string) + " 个材质可以合并。\n请点击“第二步: 确认合并”来执行替换。") title:"分析结果"
+            btn_sel_dup.enabled = true -- 允许选择重复材质的模型
+            
+            local msg = "分析完成！\n\n"
+            msg += "场景总材质数: " + (totalCount as string) + " 个\n\n"
+            
+            msg += "【重复统计】\n"
+            msg += "共有重复材质: " + (totalDupInvolved as string) + " 个\n"
+            msg += "其中可合并的: " + (mergeableCount as string) + " 个\n"
+            msg += "它们可以被合并为: " + (targetCount as string) + " 个材质\n\n"
+            
+            msg += "【结果预测】\n"
+            msg += "合并后场景将剩余材质: " + (remainCount as string) + " 个\n\n"
+            
+            msg += "提示：点击【选择含重复材质的模型】按钮可以选中它们。\n"
+            msg += "确认无误后点击【第二步: 确认合并】执行最终合并替换。"
+            
+            messageBox msg title:"分析结果"
         ) else (
             lbl_status.text = "扫描完成！当前场景没有符合条件的重复材质。"
             messageBox "您的场景非常干净，没有发现符合条件的重复材质！" title:"提示"
+        )
+    )
+    
+    -- ==================== 选择含重复材质的模型 ====================
+    on btn_sel_dup pressed do (
+        if mergePairs_cache.count == 0 do return false
+        
+        local oldMats = #()
+        for pair in mergePairs_cache do append oldMats pair[1]
+        
+        local searchObjs = if isTargetedScope then targetObjs_cache else objects
+        local objsToSelect = #()
+        
+        for obj in searchObjs do (
+            if obj.mat != undefined and hasOldMat obj.mat oldMats visited:#() then (
+                append objsToSelect obj
+            )
+        )
+        
+        if objsToSelect.count > 0 then (
+            select objsToSelect
+            lbl_status.text = "已选中 " + (objsToSelect.count as string) + " 个包含重复材质的模型。"
+        ) else (
+            lbl_status.text = "没有找到可以直接选中的模型(或模型被隐藏)。"
         )
     )
 
@@ -175,6 +245,7 @@ rollout AdvancedMatMerger "智能材质合并工具 (两步安全版)" width:320 height:290
     on btn_merge pressed do (
         btn_scan.enabled = false
         btn_merge.enabled = false
+        btn_sel_dup.enabled = false
         lbl_status.text = "正在合并材质，请稍候..."
         pb_bar.value = 0
         
